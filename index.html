@@ -300,16 +300,63 @@
     color:var(--paper-light);font-family:'Fraunces',serif;font-size:1.1rem;
     background:var(--ink);
   }
+
+  /* ---------- login ---------- */
+  .login-screen{
+    min-height:100vh;background:var(--ink);color:var(--paper-light);
+    display:none;flex-direction:column;align-items:center;justify-content:center;
+    padding:2rem;gap:1.4rem;text-align:center;
+  }
+  .login-screen h2{font-size:1.35rem;font-weight:600;margin:0;}
+  .login-screen .subtitle{color:#9FB0B0;font-size:0.88rem;margin-top:-0.6rem;}
+  .user-cards{display:flex;gap:1rem;width:100%;max-width:360px;}
+  .user-card{
+    flex:1;background:var(--paper-light);color:var(--ink);border:none;
+    border-radius:6px;padding:1.7rem 1rem;font-family:'Fraunces',serif;
+    font-size:1.1rem;font-weight:600;cursor:pointer;
+  }
+  .user-card:active{opacity:0.85;}
+
+  /* ---------- fila de usuario en el encabezado ---------- */
+  .user-row{
+    display:flex;align-items:center;justify-content:space-between;
+    margin-bottom:0.6rem;font-size:0.82rem;color:#B9C6C6;
+  }
+  .user-row button{
+    background:none;border:none;color:var(--gold);
+    font-size:0.78rem;cursor:pointer;padding:0.2rem;
+  }
+
+  /* ---------- gráfico de dona (presupuesto) ---------- */
+  .donut-wrap{display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap;}
+  .legend{flex:1;min-width:150px;}
+  .legend-item{display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;padding:0.25rem 0;}
+  .legend-swatch{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+  .legend-item .name{flex:1;}
+  .legend-item .pct{color:var(--ink-soft);font-variant-numeric:tabular-nums;font-size:0.8rem;white-space:nowrap;}
 </style>
 </head>
 <body>
 
 <div id="loading" class="loading-screen">Abriendo el libro de cuentas…</div>
 
+<div class="login-screen" id="loginScreen">
+  <h2 class="serif">¿Quién está usando la app?</h2>
+  <div class="subtitle">Elige tu nombre para identificar tus movimientos</div>
+  <div class="user-cards" id="userCards">
+    <button type="button" class="user-card" data-user="Alejandra">Alejandra</button>
+    <button type="button" class="user-card" data-user="Leonardo">Leonardo</button>
+  </div>
+</div>
+
 <div class="app" id="app" style="display:none;">
 
   <header class="top">
     <h1>Finanzas de la casa</h1>
+    <div class="user-row">
+      <span id="userGreeting"></span>
+      <button type="button" id="switchUserBtn">Cambiar de usuario</button>
+    </div>
     <div class="month-nav">
       <button id="prevMonth" aria-label="Mes anterior">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>
@@ -409,8 +456,14 @@
 
     <!-- ================= PRESUPUESTO ================= -->
     <section class="section" id="sec-presupuesto">
-      <div class="section-title" id="presupuestoTitle">Presupuesto del mes</div>
-      <div id="presupuestoList"></div>
+      <div class="block">
+        <div class="section-title">Distribución del gasto</div>
+        <div id="presupuestoChart"></div>
+      </div>
+      <div class="block">
+        <div class="section-title" id="presupuestoTitle">Presupuesto del mes</div>
+        <div id="presupuestoList"></div>
+      </div>
     </section>
 
   </div>
@@ -448,8 +501,16 @@
 
   var CATEGORIAS_GASTO = ['Alimentación','Transporte','Vivienda','Servicios básicos','Salud','Educación','Entretención','Otros'];
   var CATEGORIAS_INGRESO = ['Sueldo','Jubilación o pensión','Otro ingreso'];
+  var CATEGORIA_COLORS = {
+    'Alimentación':'#2F6F4E', 'Transporte':'#3D6B8A', 'Vivienda':'#8A5A3D',
+    'Servicios básicos':'#B8842A', 'Salud':'#A63A2C', 'Educación':'#5C4A8A',
+    'Entretención':'#C97B4A', 'Otros':'#6B6B5C'
+  };
+  var USERS = ['Alejandra','Leonardo'];
+  var USER_SESSION_KEY = 'finanzas-hogar-usuario-sesion';
 
   var state = null;
+  var currentUser = null;
   var currentMonthDate = startOfMonth(new Date());
   var currentTipo = 'ingreso';
   var lastDeleted = null; // {kind:'movimiento'|'cuenta', item, index}
@@ -650,7 +711,7 @@
         html += '<div class="row" data-mov-row="'+m.id+'">' +
           '<div class="row-main">' +
             '<div class="row-desc">'+escapeHtml(m.descripcion || m.categoria)+'</div>' +
-            '<div class="row-meta">'+fmtDateShort(m.fecha)+' &middot; '+escapeHtml(m.categoria)+'</div>' +
+            '<div class="row-meta">'+fmtDateShort(m.fecha)+' &middot; '+escapeHtml(m.categoria)+(m.usuario ? ' &middot; '+escapeHtml(m.usuario) : '')+'</div>' +
           '</div>' +
           '<div class="row-right">' +
             '<span class="row-amt '+(m.tipo==='ingreso'?'ing':'gas')+'">'+(m.tipo==='ingreso'?'+':'-')+' '+fmtMoney(m.monto)+'</span>' +
@@ -681,7 +742,7 @@
         html += '<div class="row">' +
           '<div class="row-main">' +
             '<div class="row-desc">'+escapeHtml(c.nombre)+'</div>' +
-            '<div class="row-meta">Vence el día '+c.dia+' &middot; '+fmtMoney(c.montoDefault)+(c.recurrente?' &middot; mensual':'')+'</div>' +
+            '<div class="row-meta">Vence el día '+c.dia+' &middot; '+fmtMoney(c.montoDefault)+(c.recurrente?' &middot; mensual':'')+(pagado && pago.usuario ? ' &middot; Pagado por '+escapeHtml(pago.usuario) : '')+'</div>' +
           '</div>' +
           '<div class="row-right">' +
             '<span class="pill '+estado+'">'+estadoLabel+'</span>' +
@@ -698,8 +759,39 @@
     document.getElementById('cuentasList').innerHTML = html;
   }
 
+  function renderPresupuestoChart(mk){
+    var porCat = gastosPorCategoria(mk);
+    var entries = Object.keys(porCat).map(function(k){ return {cat:k, monto:porCat[k]}; }).filter(function(e){ return e.monto > 0; });
+    entries.sort(function(a,b){ return b.monto - a.monto; });
+    var total = entries.reduce(function(s,e){ return s + e.monto; }, 0);
+    var container = document.getElementById('presupuestoChart');
+    if(!entries.length || !total){
+      container.innerHTML = '<div class="empty-state">Aún no hay gastos este mes para mostrar en el gráfico.</div>';
+      return;
+    }
+    var r = 58, cx = 74, cy = 74, strokeWidth = 20;
+    var circumference = 2 * Math.PI * r;
+    var offsetAcc = 0;
+    var circles = '';
+    entries.forEach(function(e){
+      var frac = e.monto / total;
+      var len = frac * circumference;
+      var color = CATEGORIA_COLORS[e.cat] || '#6B6B5C';
+      circles += '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+color+'" stroke-width="'+strokeWidth+'" stroke-dasharray="'+len+' '+(circumference-len)+'" stroke-dashoffset="'+(-offsetAcc)+'"/>';
+      offsetAcc += len;
+    });
+    var svg = '<svg viewBox="0 0 148 148" width="148" height="148" style="transform:rotate(-90deg);flex-shrink:0;">'+circles+'</svg>';
+    var legend = '<div class="legend">' + entries.map(function(e){
+      var pct = Math.round((e.monto/total)*100);
+      var color = CATEGORIA_COLORS[e.cat] || '#6B6B5C';
+      return '<div class="legend-item"><span class="legend-swatch" style="background:'+color+'"></span><span class="name">'+escapeHtml(e.cat)+'</span><span class="pct">'+pct+'% &middot; '+fmtMoney(e.monto)+'</span></div>';
+    }).join('') + '</div>';
+    container.innerHTML = '<div class="donut-wrap">'+svg+legend+'</div>';
+  }
+
   function renderPresupuesto(){
     var mk = monthKeyOf(currentMonthDate);
+    renderPresupuestoChart(mk);
     document.getElementById('presupuestoTitle').textContent = 'Presupuesto de ' + monthLabelOf(currentMonthDate).toLowerCase();
     var porCat = gastosPorCategoria(mk);
     var html = '';
@@ -752,7 +844,7 @@
       showToast('Ingresa un monto válido.', null);
       return;
     }
-    var mov = { id: uid(), fecha: fecha, tipo: currentTipo, categoria: categoria, descripcion: descripcion, monto: monto };
+    var mov = { id: uid(), fecha: fecha, tipo: currentTipo, categoria: categoria, descripcion: descripcion, monto: monto, usuario: currentUser };
     state.movimientos.push(mov);
     await saveState();
     document.getElementById('movDescripcion').value = '';
@@ -840,11 +932,11 @@
     if(!monto || monto <= 0) monto = cuenta.montoDefault || 0;
 
     if(!state.pagos[mk]) state.pagos[mk] = {};
-    state.pagos[mk][cuentaId] = { pagado: true, monto: monto, fecha: todayISO() };
+    state.pagos[mk][cuentaId] = { pagado: true, monto: monto, fecha: todayISO(), usuario: currentUser };
 
     state.movimientos.push({
       id: uid(), fecha: todayISO(), tipo: 'gasto',
-      categoria: 'Servicios básicos', descripcion: cuenta.nombre, monto: monto
+      categoria: 'Servicios básicos', descripcion: cuenta.nombre, monto: monto, usuario: currentUser
     });
 
     await saveState();
@@ -858,6 +950,23 @@
     if(state.pagos[mk]) delete state.pagos[mk][cuentaId];
     await saveState();
     renderAll();
+  }
+
+  // ---------- usuarios ----------
+  function updateUserGreeting(){
+    var el = document.getElementById('userGreeting');
+    if(el) el.textContent = currentUser ? 'Hola, ' + currentUser : '';
+  }
+  function showLogin(){
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('loginScreen').style.display = 'flex';
+  }
+  function enterApp(user){
+    currentUser = user;
+    try{ sessionStorage.setItem(USER_SESSION_KEY, user); }catch(e){}
+    updateUserGreeting();
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
   }
 
   // ---------- navegación ----------
@@ -941,6 +1050,15 @@
       var goto = e.target.closest('button[data-goto]');
       if(goto) showSection(goto.getAttribute('data-goto'));
     });
+
+    document.getElementById('userCards').addEventListener('click', function(e){
+      var btn = e.target.closest('button[data-user]');
+      if(btn) enterApp(btn.getAttribute('data-user'));
+    });
+    document.getElementById('switchUserBtn').addEventListener('click', function(){
+      try{ sessionStorage.removeItem(USER_SESSION_KEY); }catch(e){}
+      showLogin();
+    });
   }
 
   // ---------- init ----------
@@ -950,7 +1068,14 @@
     bindEvents();
     renderAll();
     document.getElementById('loading').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
+
+    var savedUser = null;
+    try{ savedUser = sessionStorage.getItem(USER_SESSION_KEY); }catch(e){}
+    if(savedUser && USERS.indexOf(savedUser) !== -1){
+      enterApp(savedUser);
+    } else {
+      showLogin();
+    }
   }
 
   init();
