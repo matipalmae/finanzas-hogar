@@ -214,6 +214,14 @@
   }
   .toggle-group button.active.ing{background:var(--green-bg);border-color:var(--green);color:var(--green);}
   .toggle-group button.active.gas{background:var(--red-bg);border-color:var(--red);color:var(--red);}
+  .toggle-group button.active.clp,
+  .toggle-group button.active.usd{background:var(--gold-bg);border-color:var(--gold);color:var(--gold);}
+  .fx-hint{font-size:0.78rem;color:var(--ink-soft);margin-top:0.4rem;line-height:1.4;}
+  .fx-hint .refresh-link{
+    background:none;border:none;color:var(--gold);font-size:inherit;
+    text-decoration:underline;text-underline-offset:2px;cursor:pointer;
+    padding:0;margin-left:0.3rem;
+  }
   .checkbox-row{display:flex;align-items:center;gap:0.5rem;font-size:0.9rem;color:var(--ink-soft);}
   .checkbox-row input{width:18px;height:18px;}
 
@@ -399,6 +407,10 @@
           <button type="button" class="active ing" data-tipo="ingreso">Ingreso</button>
           <button type="button" class="gas" data-tipo="gasto">Gasto</button>
         </div>
+        <div class="toggle-group" id="monedaToggle">
+          <button type="button" class="active clp" data-moneda="CLP">Pesos (CLP)</button>
+          <button type="button" class="usd" data-moneda="USD">Dólares (USD)</button>
+        </div>
         <div class="field">
           <label for="movFecha">Fecha</label>
           <input type="date" id="movFecha">
@@ -412,8 +424,9 @@
           <input type="text" id="movDescripcion" placeholder="Ej: Supermercado, sueldo, feria">
         </div>
         <div class="field">
-          <label for="movMonto">Monto</label>
+          <label for="movMonto" id="movMontoLabel">Monto</label>
           <input type="number" id="movMonto" min="0" step="1" placeholder="0">
+          <div class="fx-hint" id="fxHint" style="display:none;"></div>
         </div>
         <button class="submit-btn" id="addMovBtn">Agregar movimiento</button>
       </div>
@@ -508,11 +521,15 @@
   };
   var USERS = ['Alejandra','Leonardo'];
   var USER_SESSION_KEY = 'finanzas-hogar-usuario-sesion';
+  var EXCHANGE_RATE_KEY = 'finanzas-hogar-tasa-usd';
+  var EXCHANGE_RATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 1 semana
 
   var state = null;
   var currentUser = null;
   var currentMonthDate = startOfMonth(new Date());
   var currentTipo = 'ingreso';
+  var currentMoneda = 'CLP';
+  var exchangeRate = null; // {valor, fechaValor, fetchedAt}
   var lastDeleted = null; // {kind:'movimiento'|'cuenta', item, index}
   var toastTimer = null;
 
@@ -579,6 +596,61 @@
     }catch(e){
       console.error('Error guardando datos', e);
       showToast('No se pudo guardar. Revisa el espacio del navegador.', null);
+    }
+  }
+
+  // ---------- tasa de cambio USD -> CLP (mindicador.cl, API pública del Banco Central de Chile) ----------
+  function loadExchangeRateCache(){
+    try{
+      var raw = localStorage.getItem(EXCHANGE_RATE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    }catch(e){ return null; }
+  }
+  function saveExchangeRateCache(obj){
+    try{ localStorage.setItem(EXCHANGE_RATE_KEY, JSON.stringify(obj)); }catch(e){}
+  }
+  function rateNeedsRefresh(cache){
+    if(!cache || !cache.fetchedAt) return true;
+    return (Date.now() - new Date(cache.fetchedAt).getTime()) > EXCHANGE_RATE_MAX_AGE_MS;
+  }
+  async function ensureExchangeRate(forceRefresh){
+    exchangeRate = loadExchangeRateCache();
+    if(forceRefresh || rateNeedsRefresh(exchangeRate)){
+      try{
+        var res = await fetch('https://mindicador.cl/api/dolar');
+        var data = await res.json();
+        if(data && data.serie && data.serie.length){
+          exchangeRate = {
+            valor: data.serie[0].valor,
+            fechaValor: String(data.serie[0].fecha || '').slice(0,10),
+            fetchedAt: new Date().toISOString()
+          };
+          saveExchangeRateCache(exchangeRate);
+        }
+      }catch(e){
+        console.error('No se pudo actualizar la tasa del dólar', e);
+      }
+    }
+    updateFxHint();
+  }
+  function fmtUSD(n){
+    n = Number(n) || 0;
+    return 'US$' + n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:2});
+  }
+  function updateFxHint(){
+    var hint = document.getElementById('fxHint');
+    if(!hint) return;
+    if(currentMoneda !== 'USD'){ hint.style.display = 'none'; return; }
+    hint.style.display = '';
+    var montoVal = Number(document.getElementById('movMonto').value) || 0;
+    if(exchangeRate && exchangeRate.valor){
+      var clp = Math.round(montoVal * exchangeRate.valor);
+      hint.innerHTML = 'Equivale a ' + fmtMoney(clp) + ' &middot; 1 USD = ' + fmtMoney(exchangeRate.valor) +
+        ' (' + fmtDateShort(exchangeRate.fechaValor) + ')' +
+        '<button type="button" class="refresh-link" id="refreshRateBtn">Actualizar tasa</button>';
+    } else {
+      hint.innerHTML = 'No se pudo obtener la tasa del dólar todavía.' +
+        '<button type="button" class="refresh-link" id="refreshRateBtn">Reintentar</button>';
     }
   }
 
@@ -711,7 +783,7 @@
         html += '<div class="row" data-mov-row="'+m.id+'">' +
           '<div class="row-main">' +
             '<div class="row-desc">'+escapeHtml(m.descripcion || m.categoria)+'</div>' +
-            '<div class="row-meta">'+fmtDateShort(m.fecha)+' &middot; '+escapeHtml(m.categoria)+(m.usuario ? ' &middot; '+escapeHtml(m.usuario) : '')+'</div>' +
+            '<div class="row-meta">'+fmtDateShort(m.fecha)+' &middot; '+escapeHtml(m.categoria)+(m.usuario ? ' &middot; '+escapeHtml(m.usuario) : '')+(m.moneda==='USD' ? ' &middot; '+fmtUSD(m.montoOriginal)+' a '+fmtMoney(m.tasaCambio) : '')+'</div>' +
           '</div>' +
           '<div class="row-right">' +
             '<span class="row-amt '+(m.tipo==='ingreso'?'ing':'gas')+'">'+(m.tipo==='ingreso'?'+':'-')+' '+fmtMoney(m.monto)+'</span>' +
@@ -839,16 +911,29 @@
     var categoria = document.getElementById('movCategoria').value;
     var descripcion = document.getElementById('movDescripcion').value.trim();
     var montoVal = document.getElementById('movMonto').value;
-    var monto = Number(montoVal);
-    if(!monto || monto <= 0){
+    var montoIngresado = Number(montoVal);
+    if(!montoIngresado || montoIngresado <= 0){
       showToast('Ingresa un monto válido.', null);
       return;
     }
-    var mov = { id: uid(), fecha: fecha, tipo: currentTipo, categoria: categoria, descripcion: descripcion, monto: monto, usuario: currentUser };
+    var mov = { id: uid(), fecha: fecha, tipo: currentTipo, categoria: categoria, descripcion: descripcion, usuario: currentUser, moneda: currentMoneda };
+    if(currentMoneda === 'USD'){
+      if(!exchangeRate || !exchangeRate.valor){
+        showToast('No hay tasa del dólar disponible todavía. Intenta de nuevo en un momento.', null);
+        return;
+      }
+      mov.montoOriginal = montoIngresado;
+      mov.tasaCambio = exchangeRate.valor;
+      mov.monto = Math.round(montoIngresado * exchangeRate.valor);
+    } else {
+      mov.montoOriginal = montoIngresado;
+      mov.monto = montoIngresado;
+    }
     state.movimientos.push(mov);
     await saveState();
     document.getElementById('movDescripcion').value = '';
     document.getElementById('movMonto').value = '';
+    updateFxHint();
     // saltar a ver el mes del movimiento agregado
     var d = new Date(fecha + 'T00:00:00');
     currentMonthDate = startOfMonth(d);
@@ -1007,6 +1092,30 @@
       populateCategoriaSelect();
     });
 
+    document.getElementById('monedaToggle').addEventListener('click', function(e){
+      var btn = e.target.closest('button[data-moneda]');
+      if(!btn) return;
+      currentMoneda = btn.getAttribute('data-moneda');
+      document.querySelectorAll('#monedaToggle button').forEach(function(b){ b.classList.toggle('active', b === btn); });
+      var montoInput = document.getElementById('movMonto');
+      var label = document.getElementById('movMontoLabel');
+      if(currentMoneda === 'USD'){
+        montoInput.step = '0.01';
+        label.textContent = 'Monto en dólares (USD)';
+        ensureExchangeRate(false);
+      } else {
+        montoInput.step = '1';
+        label.textContent = 'Monto';
+      }
+      updateFxHint();
+    });
+
+    document.getElementById('movMonto').addEventListener('input', updateFxHint);
+
+    document.getElementById('fxHint').addEventListener('click', function(e){
+      if(e.target.closest('#refreshRateBtn')) ensureExchangeRate(true);
+    });
+
     document.getElementById('addMovBtn').addEventListener('click', addMovimiento);
     document.getElementById('addCuentaBtn').addEventListener('click', addCuenta);
 
@@ -1067,6 +1176,7 @@
     populateCategoriaSelect();
     bindEvents();
     renderAll();
+    ensureExchangeRate(false); // en segundo plano, no bloquea la carga
     document.getElementById('loading').style.display = 'none';
 
     var savedUser = null;
